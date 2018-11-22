@@ -1,0 +1,6 @@
+[package]
+name = "SplitMerge"
+version = "0.1.0"
+authors = ["Jon Ayerdi <jon_ayerdi_33@hotmail.es>"]
+
+[dependencies]
