@@ -32,9 +32,41 @@ fn parse_size(sizestr: &str) -> Option<u64> {
     }
 }
 
-fn split_file(infilename: &str, outfolder: &str, partsize: u64) -> Result<(),(String,io::Error)> {
+fn copy_file_part(infilename: &str, outfilepath: &Path, infile: &mut fs::File, 
+        outfile: &mut fs::File, bytes_to_copy: u64) -> Result<bool,(String,io::Error)> {
     let mut buffer: [u8; BUFFERSIZE] = unsafe{ mem::uninitialized() };
-    
+    let mut written: u64 = 0;
+    loop {
+        let remain = bytes_to_copy - written;
+        let to_read = if remain < BUFFERSIZE as u64 { remain as usize } else { BUFFERSIZE };
+        let readbuff = &mut buffer[0..to_read];
+        match infile.read(readbuff) {
+            Ok(n) => {
+                if n > 0 {
+                    let writebuff = &readbuff[0..n];
+                    match outfile.write(writebuff) {
+                        Ok(s) => written += s as u64,
+                        Err(e) => {
+                            let outfilename = outfilepath.to_str().unwrap_or("<non UTF-8 path>");
+                            return Err((format!("Error writing to \"{}\"", outfilename),e))
+                        },
+                    }
+                } else {
+                    // No bytes read, should mean end of infile
+                    if written == 0 {
+                        drop(outfile);
+                        fs::remove_file(&outfilepath).unwrap_or_default();
+                    }
+                    break Ok(true);
+                }
+            },
+            Err(e) => return Err((format!("Error reading from \"{}\"", infilename),e)),
+        };
+        if written >= bytes_to_copy { break Ok(false); } // partsize bytes written, infile EOL not reached
+    }
+}
+
+fn split_file(infilename: &str, outfolder: &str, partsize: u64) -> Result<(),(String,io::Error)> {    
     // Check output directory, create if required
     let outpath = Path::new(&outfolder);
     if !outpath.is_dir() {
@@ -61,32 +93,10 @@ fn split_file(infilename: &str, outfolder: &str, partsize: u64) -> Result<(),(St
             Err(e) => return Err((format!("Error creating and opening \"{}\" for writing", outfilename),e)),
         };
         // Write to outfile
-        let mut written: u64 = 0;
-        let eof = loop {
-            let remain = partsize - written;
-            let (mut readbuff, _) = buffer.split_at_mut(if remain < BUFFERSIZE as u64 { remain as usize } else { BUFFERSIZE });
-            match infile.read(readbuff) {
-                Ok(n) => {
-                    if n > 0 {
-                        let (writebuff, _) = readbuff.split_at(n);
-                        match outfile.write(writebuff) {
-                            Ok(s) => written += s as u64,
-                            Err(e) => return Err((format!("Error writing to \"{}\"", outfilename),e)),
-                        }
-                    } else {
-                        // No bytes read, should mean end of infile
-                        if written == 0 {
-                            drop(outfile);
-                            fs::remove_file(&outfilepath).unwrap_or_default();
-                        }
-                        break true;
-                    }
-                },
-                Err(e) => return Err((format!("Error reading from \"{}\"", infilename),e)),
-            };
-            if written >= partsize { break false; } // partsize bytes written, switch to next file
-        };
-        if eof { break; }
+        match copy_file_part(infilename, &outfilepath, &mut infile, &mut outfile, partsize) {
+            Ok(eof) => if eof { break; },
+            Err((m,e)) => return Err((m,e)),
+        }
         filecount += 1;
     }
     Ok(())
