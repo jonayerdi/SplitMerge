@@ -32,8 +32,7 @@ fn parse_size(sizestr: &str) -> Option<u64> {
     }
 }
 
-fn copy_file_part(infilename: &str, outfilename: &str, infile: &mut fs::File, 
-        outfile: &mut fs::File, bytes_to_copy: u64) -> Result<u64,(String,io::Error)> {
+fn copy_file_part(infile: &mut Read, outfile: &mut Write, bytes_to_copy: u64) -> Result<u64,(String,io::Error)> {
     let mut buffer: [u8; BUFFERSIZE] = unsafe{ mem::uninitialized() };
     let mut written: u64 = 0;
     loop {
@@ -46,13 +45,13 @@ fn copy_file_part(infilename: &str, outfilename: &str, infile: &mut fs::File,
                     let writebuff = &readbuff[0..n];
                     match outfile.write(writebuff) {
                         Ok(s) => written += s as u64,
-                        Err(e) => { return Err((format!("Error writing to \"{}\"", outfilename),e)) },
+                        Err(e) => { return Err((String::from("Error writing to file"),e)) },
                     }
                 } else {
                     break Ok(written); // No bytes read, should mean end of infile
                 }
             },
-            Err(e) => return Err((format!("Error reading from \"{}\"", infilename),e)),
+            Err(e) => return Err((String::from("Error reading from file"),e)),
         };
         if written >= bytes_to_copy { break Ok(bytes_to_copy); } // bytes_to_copy bytes written, infile EOL not reached
     }
@@ -85,7 +84,7 @@ fn split_file(infilename: &str, outfolder: &str, partsize: u64) -> Result<(),(St
             Err(e) => return Err((format!("Error creating and opening \"{}\" for writing", outfilename),e)),
         };
         // Write to outfile
-        match copy_file_part(infilename, outfilename, &mut infile, &mut outfile, partsize) {
+        match copy_file_part(&mut infile, &mut outfile, partsize) {
             Ok(written) => {
                 // Less than partsize bytes read, should mean end of infile
                 if written < partsize {
@@ -96,7 +95,10 @@ fn split_file(infilename: &str, outfolder: &str, partsize: u64) -> Result<(),(St
                     break;
                 }
             },
-            Err((m,e)) => return Err((m,e)),
+            Err((m,e)) => {
+                let msg = format!("Error copying data from \"{}\" to \"{}\": \"{}\"", infilename, outfilename, m);
+                return Err((msg,e))
+            },
         }
         filecount += 1;
     }
@@ -141,7 +143,7 @@ fn main() -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod split_tests {
     use super::*;
     #[test]
     fn test_parse_size() {
